@@ -18,6 +18,7 @@ import { LinearGradient } from "expo-linear-gradient";
 import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { useRouter } from "expo-router";
+import { useTheme } from "../contexts/ThemeContext";
 
 const { width, height } = Dimensions.get("window");
 
@@ -43,6 +44,8 @@ interface DashboardStats {
   xp_points: number;
   karma_level: number;
   habit_completions_this_week: number;
+  current_streak: number;
+  friends_count: number;
 }
 
 export default function Index() {
@@ -53,6 +56,7 @@ export default function Index() {
   const [refreshing, setRefreshing] = useState(false);
   const [loading, setLoading] = useState(true);
   const router = useRouter();
+  const { colors, isDarkMode } = useTheme();
 
   const BACKEND_URL = process.env.EXPO_PUBLIC_BACKEND_URL || "http://localhost:8001";
 
@@ -169,19 +173,23 @@ export default function Index() {
     return xp.toString();
   };
 
+  const styles = createStyles(colors);
+
   if (loading) {
     return (
-      <SafeAreaView style={styles.container}>
+      <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
         <View style={styles.loadingContainer}>
-          <Text style={styles.loadingText}>Loading your productivity hub...</Text>
+          <Text style={[styles.loadingText, { color: colors.text }]}>
+            Loading your productivity hub...
+          </Text>
         </View>
       </SafeAreaView>
     );
   }
 
   return (
-    <SafeAreaView style={styles.container}>
-      <StatusBar style="light" />
+    <SafeAreaView style={[styles.container, { backgroundColor: colors.background }]}>
+      <StatusBar style={isDarkMode ? "light" : "dark"} />
       <KeyboardAvoidingView
         behavior={Platform.OS === "ios" ? "padding" : "height"}
         style={styles.keyboardContainer}
@@ -190,44 +198,66 @@ export default function Index() {
           style={styles.scrollView}
           contentContainerStyle={styles.scrollContent}
           refreshControl={
-            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#ffffff" />
+            <RefreshControl 
+              refreshing={refreshing} 
+              onRefresh={onRefresh} 
+              tintColor={colors.primary}
+            />
           }
           showsVerticalScrollIndicator={false}
         >
           {/* Header */}
           <LinearGradient
-            colors={["#667eea", "#764ba2"]}
+            colors={[colors.gradientStart, colors.gradientEnd]}
             style={styles.headerGradient}
             start={{ x: 0, y: 0 }}
             end={{ x: 1, y: 1 }}
           >
             <View style={styles.header}>
               <View>
-                <Text style={styles.greeting}>Good {new Date().getHours() < 12 ? "Morning" : new Date().getHours() < 18 ? "Afternoon" : "Evening"}!</Text>
+                <Text style={styles.greeting}>
+                  Good {new Date().getHours() < 12 ? "Morning" : new Date().getHours() < 18 ? "Afternoon" : "Evening"}!
+                </Text>
                 <Text style={styles.subtitle}>Let's make today productive</Text>
               </View>
-              <TouchableOpacity 
-                style={styles.profileButton}
-                onPress={() => router.push("/profile")}
-              >
-                <Ionicons name="person-circle-outline" size={32} color="#ffffff" />
-              </TouchableOpacity>
+              <View style={styles.headerActions}>
+                <TouchableOpacity 
+                  style={styles.headerButton}
+                  onPress={() => router.push("/settings")}
+                >
+                  <Ionicons name="settings" size={24} color="#ffffff" />
+                </TouchableOpacity>
+                <TouchableOpacity 
+                  style={styles.headerButton}
+                  onPress={() => router.push("/profile")}
+                >
+                  <Ionicons name="person-circle-outline" size={32} color="#ffffff" />
+                </TouchableOpacity>
+              </View>
             </View>
 
-            {/* Stats Cards */}
+            {/* Enhanced Stats Cards */}
             {stats && (
               <View style={styles.statsContainer}>
                 <View style={styles.statCard}>
+                  <Ionicons name="flash" size={20} color="#FFD93D" />
                   <Text style={styles.statNumber}>{formatXP(stats.xp_points)}</Text>
-                  <Text style={styles.statLabel}>XP Points</Text>
+                  <Text style={styles.statLabel}>XP</Text>
                 </View>
                 <View style={styles.statCard}>
+                  <Ionicons name="diamond" size={20} color="#4ECDC4" />
                   <Text style={styles.statNumber}>{stats.karma_level}</Text>
                   <Text style={styles.statLabel}>Level</Text>
                 </View>
                 <View style={styles.statCard}>
-                  <Text style={styles.statNumber}>{Math.round(stats.completion_rate * 100)}%</Text>
-                  <Text style={styles.statLabel}>Completion</Text>
+                  <Ionicons name="flame" size={20} color="#FF6B6B" />
+                  <Text style={styles.statNumber}>{stats.current_streak}</Text>
+                  <Text style={styles.statLabel}>Streak</Text>
+                </View>
+                <View style={styles.statCard}>
+                  <Ionicons name="people" size={20} color="#967ADC" />
+                  <Text style={styles.statNumber}>{stats.friends_count}</Text>
+                  <Text style={styles.statLabel}>Friends</Text>
                 </View>
               </View>
             )}
@@ -236,7 +266,7 @@ export default function Index() {
           {/* AI Recommendation Button */}
           <TouchableOpacity style={styles.aiButton} onPress={getNextBestTask}>
             <LinearGradient
-              colors={["#FF6B6B", "#FF8E8E"]}
+              colors={[colors.gradientStart, colors.gradientEnd]}
               style={styles.aiButtonGradient}
               start={{ x: 0, y: 0 }}
               end={{ x: 1, y: 0 }}
@@ -249,32 +279,41 @@ export default function Index() {
           {/* Tasks Section */}
           <View style={styles.section}>
             <View style={styles.sectionHeader}>
-              <Text style={styles.sectionTitle}>Active Tasks ({tasks.length})</Text>
+              <Text style={[styles.sectionTitle, { color: colors.text }]}>
+                Active Tasks ({tasks.length})
+              </Text>
               <TouchableOpacity 
-                style={styles.addButton}
+                style={[styles.addButton, { backgroundColor: colors.surface }]}
                 onPress={() => setShowAddTask(!showAddTask)}
               >
                 <Ionicons 
                   name={showAddTask ? "close" : "add"} 
                   size={24} 
-                  color="#667eea" 
+                  color={colors.primary} 
                 />
               </TouchableOpacity>
             </View>
 
             {/* Add Task Form */}
             {showAddTask && (
-              <View style={styles.addTaskForm}>
+              <View style={[styles.addTaskForm, { backgroundColor: colors.surface }]}>
                 <TextInput
-                  style={styles.taskInput}
+                  style={[styles.taskInput, { 
+                    color: colors.text, 
+                    borderColor: colors.border,
+                    backgroundColor: colors.background 
+                  }]}
                   placeholder="What needs to be done?"
-                  placeholderTextColor="#999"
+                  placeholderTextColor={colors.textSecondary}
                   value={newTaskTitle}
                   onChangeText={setNewTaskTitle}
                   multiline
                   maxLength={200}
                 />
-                <TouchableOpacity style={styles.createButton} onPress={createTask}>
+                <TouchableOpacity 
+                  style={[styles.createButton, { backgroundColor: colors.primary }]} 
+                  onPress={createTask}
+                >
                   <Text style={styles.createButtonText}>Create Task</Text>
                 </TouchableOpacity>
               </View>
@@ -283,16 +322,20 @@ export default function Index() {
             {/* Task List */}
             {tasks.length === 0 ? (
               <View style={styles.emptyState}>
-                <Ionicons name="checkmark-circle-outline" size={64} color="#cccccc" />
-                <Text style={styles.emptyStateText}>No active tasks</Text>
-                <Text style={styles.emptyStateSubtext}>Tap the + button to add your first task</Text>
+                <Ionicons name="checkmark-circle-outline" size={64} color={colors.textSecondary} />
+                <Text style={[styles.emptyStateText, { color: colors.textSecondary }]}>
+                  No active tasks
+                </Text>
+                <Text style={[styles.emptyStateSubtext, { color: colors.textSecondary }]}>
+                  Tap the + button to add your first task
+                </Text>
               </View>
             ) : (
               <View style={styles.taskList}>
                 {tasks.map((task) => (
                   <TouchableOpacity
                     key={task.id}
-                    style={styles.taskCard}
+                    style={[styles.taskCard, { backgroundColor: colors.surface }]}
                     onPress={() => completeTask(task.id)}
                     activeOpacity={0.8}
                   >
@@ -302,41 +345,51 @@ export default function Index() {
                           styles.priorityIndicator,
                           { backgroundColor: getPriorityColor(task.ai_priority || task.priority) }
                         ]} />
-                        <Text style={styles.taskTitle} numberOfLines={2}>
+                        <Text style={[styles.taskTitle, { color: colors.text }]} numberOfLines={2}>
                           {task.title}
                         </Text>
                       </View>
                       
                       {task.description && (
-                        <Text style={styles.taskDescription} numberOfLines={2}>
+                        <Text style={[styles.taskDescription, { color: colors.textSecondary }]} numberOfLines={2}>
                           {task.description}
                         </Text>
                       )}
                       
                       <View style={styles.taskFooter}>
                         <View style={styles.taskMeta}>
-                          <Text style={styles.taskCategory}>{task.category}</Text>
+                          <Text style={[styles.taskCategory, { 
+                            backgroundColor: colors.primary + "20",
+                            color: colors.primary 
+                          }]}>
+                            {task.category}
+                          </Text>
                           {task.estimated_duration && (
-                            <Text style={styles.taskDuration}>
+                            <Text style={[styles.taskDuration, { color: colors.textSecondary }]}>
                               {task.estimated_duration}min
                             </Text>
                           )}
                         </View>
                         
                         {task.ai_priority && (
-                          <View style={styles.aiTag}>
-                            <Ionicons name="sparkles" size={12} color="#667eea" />
-                            <Text style={styles.aiTagText}>AI Priority</Text>
+                          <View style={[styles.aiTag, { backgroundColor: colors.primary + "20" }]}>
+                            <Ionicons name="sparkles" size={12} color={colors.primary} />
+                            <Text style={[styles.aiTagText, { color: colors.primary }]}>
+                              AI Priority
+                            </Text>
                           </View>
                         )}
                       </View>
                     </View>
                     
                     <TouchableOpacity
-                      style={styles.completeButton}
+                      style={[styles.completeButton, { 
+                        backgroundColor: colors.success + "20",
+                        borderColor: colors.success 
+                      }]}
                       onPress={() => completeTask(task.id)}
                     >
-                      <Ionicons name="checkmark" size={20} color="#30D158" />
+                      <Ionicons name="checkmark" size={20} color={colors.success} />
                     </TouchableOpacity>
                   </TouchableOpacity>
                 ))}
@@ -344,30 +397,38 @@ export default function Index() {
             )}
           </View>
 
-          {/* Quick Actions */}
+          {/* Enhanced Quick Actions */}
           <View style={styles.quickActions}>
             <TouchableOpacity 
-              style={styles.quickActionButton}
+              style={[styles.quickActionButton, { backgroundColor: colors.surface }]}
               onPress={() => router.push("/habits")}
             >
-              <Ionicons name="repeat" size={24} color="#667eea" />
-              <Text style={styles.quickActionText}>Habits</Text>
+              <Ionicons name="repeat" size={24} color={colors.primary} />
+              <Text style={[styles.quickActionText, { color: colors.text }]}>Habits</Text>
             </TouchableOpacity>
             
             <TouchableOpacity 
-              style={styles.quickActionButton}
+              style={[styles.quickActionButton, { backgroundColor: colors.surface }]}
               onPress={() => router.push("/analytics")}
             >
-              <Ionicons name="analytics" size={24} color="#667eea" />
-              <Text style={styles.quickActionText}>Analytics</Text>
+              <Ionicons name="analytics" size={24} color={colors.primary} />
+              <Text style={[styles.quickActionText, { color: colors.text }]}>Analytics</Text>
             </TouchableOpacity>
             
             <TouchableOpacity 
-              style={styles.quickActionButton}
-              onPress={() => router.push("/notifications")}
+              style={[styles.quickActionButton, { backgroundColor: colors.surface }]}
+              onPress={() => router.push("/friends")}
             >
-              <Ionicons name="notifications" size={24} color="#667eea" />
-              <Text style={styles.quickActionText}>Reminders</Text>
+              <Ionicons name="people" size={24} color={colors.primary} />
+              <Text style={[styles.quickActionText, { color: colors.text }]}>Friends</Text>
+            </TouchableOpacity>
+            
+            <TouchableOpacity 
+              style={[styles.quickActionButton, { backgroundColor: colors.surface }]}
+              onPress={() => router.push("/leaderboard")}
+            >
+              <Ionicons name="trophy" size={24} color={colors.primary} />
+              <Text style={[styles.quickActionText, { color: colors.text }]}>Leaderboard</Text>
             </TouchableOpacity>
           </View>
         </ScrollView>
@@ -376,10 +437,9 @@ export default function Index() {
   );
 }
 
-const styles = StyleSheet.create({
+const createStyles = (colors: any) => StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: "#f8f9fa",
   },
   keyboardContainer: {
     flex: 1,
@@ -394,10 +454,8 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: "center",
     alignItems: "center",
-    backgroundColor: "#667eea",
   },
   loadingText: {
-    color: "#ffffff",
     fontSize: 16,
     fontWeight: "500",
   },
@@ -425,7 +483,12 @@ const styles = StyleSheet.create({
     color: "#e0e0e0",
     marginTop: 4,
   },
-  profileButton: {
+  headerActions: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+  },
+  headerButton: {
     padding: 8,
   },
   statsContainer: {
@@ -435,15 +498,16 @@ const styles = StyleSheet.create({
   },
   statCard: {
     backgroundColor: "rgba(255, 255, 255, 0.2)",
-    padding: 20,
+    padding: 16,
     borderRadius: 16,
     alignItems: "center",
-    minWidth: 80,
+    minWidth: 70,
   },
   statNumber: {
-    fontSize: 24,
+    fontSize: 20,
     fontWeight: "bold",
     color: "#ffffff",
+    marginTop: 4,
   },
   statLabel: {
     fontSize: 12,
@@ -481,13 +545,11 @@ const styles = StyleSheet.create({
   sectionTitle: {
     fontSize: 22,
     fontWeight: "bold",
-    color: "#2d3748",
   },
   addButton: {
     width: 44,
     height: 44,
     borderRadius: 22,
-    backgroundColor: "#ffffff",
     justifyContent: "center",
     alignItems: "center",
     shadowColor: "#000",
@@ -497,7 +559,6 @@ const styles = StyleSheet.create({
     elevation: 3,
   },
   addTaskForm: {
-    backgroundColor: "#ffffff",
     borderRadius: 16,
     padding: 20,
     marginBottom: 16,
@@ -509,17 +570,14 @@ const styles = StyleSheet.create({
   },
   taskInput: {
     fontSize: 16,
-    color: "#2d3748",
     minHeight: 60,
     textAlignVertical: "top",
     borderWidth: 1,
-    borderColor: "#e2e8f0",
     borderRadius: 12,
     padding: 12,
     marginBottom: 16,
   },
   createButton: {
-    backgroundColor: "#667eea",
     borderRadius: 12,
     padding: 16,
     alignItems: "center",
@@ -536,12 +594,10 @@ const styles = StyleSheet.create({
   emptyStateText: {
     fontSize: 18,
     fontWeight: "600",
-    color: "#a0aec0",
     marginTop: 16,
   },
   emptyStateSubtext: {
     fontSize: 14,
-    color: "#cbd5e0",
     marginTop: 8,
     textAlign: "center",
   },
@@ -549,7 +605,6 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   taskCard: {
-    backgroundColor: "#ffffff",
     borderRadius: 16,
     padding: 16,
     flexDirection: "row",
@@ -577,12 +632,10 @@ const styles = StyleSheet.create({
   taskTitle: {
     fontSize: 16,
     fontWeight: "600",
-    color: "#2d3748",
     flex: 1,
   },
   taskDescription: {
     fontSize: 14,
-    color: "#718096",
     marginBottom: 12,
     lineHeight: 20,
   },
@@ -597,8 +650,6 @@ const styles = StyleSheet.create({
   },
   taskCategory: {
     fontSize: 12,
-    color: "#a0aec0",
-    backgroundColor: "#f7fafc",
     paddingHorizontal: 8,
     paddingVertical: 4,
     borderRadius: 8,
@@ -606,19 +657,16 @@ const styles = StyleSheet.create({
   },
   taskDuration: {
     fontSize: 12,
-    color: "#a0aec0",
   },
   aiTag: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "#edf2f7",
     paddingHorizontal: 8,
     paddingVertical: 4,
     borderRadius: 8,
   },
   aiTagText: {
     fontSize: 10,
-    color: "#667eea",
     marginLeft: 4,
     fontWeight: "500",
   },
@@ -626,25 +674,24 @@ const styles = StyleSheet.create({
     width: 40,
     height: 40,
     borderRadius: 20,
-    backgroundColor: "#f0fff4",
     justifyContent: "center",
     alignItems: "center",
     marginLeft: 12,
     borderWidth: 1,
-    borderColor: "#30D158",
   },
   quickActions: {
     flexDirection: "row",
-    justifyContent: "space-around",
+    flexWrap: "wrap",
+    justifyContent: "space-between",
     paddingHorizontal: 20,
     marginTop: 24,
+    gap: 12,
   },
   quickActionButton: {
-    backgroundColor: "#ffffff",
     borderRadius: 16,
     padding: 20,
     alignItems: "center",
-    minWidth: 100,
+    width: "48%",
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.1,
@@ -653,7 +700,6 @@ const styles = StyleSheet.create({
   },
   quickActionText: {
     fontSize: 14,
-    color: "#2d3748",
     marginTop: 8,
     fontWeight: "500",
   },
