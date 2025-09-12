@@ -263,6 +263,15 @@ async def get_tasks(user_id: str = Depends(get_current_user), completed: Optiona
     tasks = await db.tasks.find(query).sort("created_at", -1).to_list(1000)
     return [Task(**task) for task in tasks]
 
+@api_router.get("/tasks/next-best")
+async def get_next_best_task_recommendation(user_id: str = Depends(get_current_user)):
+    logging.info(f"Getting next best task for user: {user_id}")
+    recommendation = await get_next_best_task(user_id)
+    logging.info(f"Recommendation result: {recommendation}")
+    if not recommendation:
+        return {"message": "No tasks available for recommendation"}
+    return recommendation
+
 @api_router.get("/tasks/{task_id}", response_model=Task)
 async def get_task(task_id: str, user_id: str = Depends(get_current_user)):
     task = await db.tasks.find_one({"id": task_id, "user_id": user_id})
