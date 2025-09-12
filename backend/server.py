@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Depends
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, UploadFile, File
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -12,6 +12,10 @@ from datetime import datetime, timedelta
 from emergentintegrations.llm.chat import LlmChat, UserMessage
 import asyncio
 import json
+import qrcode
+import io
+import base64
+from PIL import Image
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -27,22 +31,71 @@ EMERGENT_LLM_KEY = os.environ.get('EMERGENT_LLM_KEY', 'sk-emergent-b8cA8B9D5F379
 app = FastAPI()
 api_router = APIRouter(prefix="/api")
 
-# Pydantic Models
+# Enhanced Pydantic Models
+class UserSettings(BaseModel):
+    notifications: Dict[str, bool] = Field(default_factory=lambda: {
+        "task_reminders": True,
+        "habit_nudges": True,
+        "social_updates": True,
+        "ai_insights": True,
+        "friend_activities": True,
+        "leaderboard_updates": False
+    })
+    privacy: Dict[str, str] = Field(default_factory=lambda: {
+        "profile_visibility": "friends",  # public, friends, private
+        "task_sharing": "friends",
+        "stats_visibility": "friends",
+        "friend_requests": "everyone"
+    })
+    appearance: Dict[str, Any] = Field(default_factory=lambda: {
+        "dark_mode": False,
+        "language": "en",
+        "region": "US",
+        "time_format": "12h"
+    })
+
 class User(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    username: str
     name: str
     email: str
+    phone: Optional[str] = None
+    bio: Optional[str] = None
+    profile_picture: Optional[str] = None  # base64 encoded
     timezone: str = "UTC"
-    preferences: Dict[str, Any] = Field(default_factory=dict)
     xp_points: int = 0
     karma_level: int = 1
+    total_tasks_completed: int = 0
+    current_streak: int = 0
+    best_streak: int = 0
+    friends: List[str] = Field(default_factory=list)  # user IDs
+    friend_requests_sent: List[str] = Field(default_factory=list)
+    friend_requests_received: List[str] = Field(default_factory=list)
+    settings: UserSettings = Field(default_factory=UserSettings)
+    qr_code: Optional[str] = None  # base64 encoded QR code
     created_at: datetime = Field(default_factory=datetime.utcnow)
+    last_active: datetime = Field(default_factory=datetime.utcnow)
 
 class UserCreate(BaseModel):
+    username: str
     name: str
     email: str
+    phone: Optional[str] = None
+    bio: Optional[str] = None
     timezone: str = "UTC"
 
+class UserUpdate(BaseModel):
+    name: Optional[str] = None
+    bio: Optional[str] = None
+    phone: Optional[str] = None
+    profile_picture: Optional[str] = None
+
+class UserSettings(BaseModel):
+    notifications: Optional[Dict[str, bool]] = None
+    privacy: Optional[Dict[str, str]] = None
+    appearance: Optional[Dict[str, Any]] = None
+
+# Enhanced Task Model with Social Features
 class Task(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     user_id: str
@@ -57,9 +110,13 @@ class Task(BaseModel):
     estimated_duration: Optional[int] = None  # minutes
     completed: bool = False
     completed_at: Optional[datetime] = None
-    context: Optional[str] = None  # location, mood, energy level
+    context: Optional[str] = None
     recurring: Optional[Dict[str, Any]] = None
     subtasks: List[Dict[str, Any]] = Field(default_factory=list)
+    shared_with_friends: bool = False
+    privacy_level: str = "private"  # private, friends, public
+    likes: List[str] = Field(default_factory=list)  # user IDs who liked
+    comments: List[Dict[str, Any]] = Field(default_factory=list)
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
 
@@ -73,6 +130,8 @@ class TaskCreate(BaseModel):
     start_date: Optional[datetime] = None
     estimated_duration: Optional[int] = None
     context: Optional[str] = None
+    shared_with_friends: bool = False
+    privacy_level: str = "private"
 
 class TaskUpdate(BaseModel):
     title: Optional[str] = None
@@ -85,7 +144,36 @@ class TaskUpdate(BaseModel):
     estimated_duration: Optional[int] = None
     completed: Optional[bool] = None
     context: Optional[str] = None
+    shared_with_friends: Optional[bool] = None
+    privacy_level: Optional[str] = None
 
+# Social Models
+class FriendRequest(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    from_user_id: str
+    to_user_id: str
+    message: Optional[str] = None
+    status: str = "pending"  # pending, accepted, rejected
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+class SocialActivity(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    user_id: str
+    activity_type: str  # task_completed, habit_completed, achievement_unlocked, streak_milestone
+    title: str
+    description: str
+    data: Dict[str, Any] = Field(default_factory=dict)
+    visible_to: List[str] = Field(default_factory=list)  # user IDs
+    likes: List[str] = Field(default_factory=list)
+    comments: List[Dict[str, Any]] = Field(default_factory=list)
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+class Leaderboard(BaseModel):
+    period: str  # daily, weekly, monthly
+    users: List[Dict[str, Any]]
+    generated_at: datetime = Field(default_factory=datetime.utcnow)
+
+# Enhanced Habit Model
 class Habit(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     user_id: str
@@ -99,6 +187,8 @@ class Habit(BaseModel):
     total_completions: int = 0
     is_active: bool = True
     reminder_time: Optional[str] = None
+    shared_with_friends: bool = False
+    privacy_level: str = "private"
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 class HabitCreate(BaseModel):
@@ -108,6 +198,8 @@ class HabitCreate(BaseModel):
     frequency: str = "daily"
     target_count: int = 1
     reminder_time: Optional[str] = None
+    shared_with_friends: bool = False
+    privacy_level: str = "private"
 
 class HabitCompletion(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
@@ -117,13 +209,14 @@ class HabitCompletion(BaseModel):
     count: int = 1
     notes: Optional[str] = None
 
+# Existing models remain the same...
 class Notification(BaseModel):
     id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     user_id: str
     title: str
     message: str
-    type: str  # reminder, nudge, achievement, reflection
-    related_id: Optional[str] = None  # task_id or habit_id
+    type: str  # reminder, nudge, achievement, reflection, social
+    related_id: Optional[str] = None  # task_id, habit_id, friend_id
     scheduled_time: datetime
     sent: bool = False
     opened: bool = False
@@ -148,7 +241,82 @@ class AIInsight(BaseModel):
 async def get_current_user(user_id: str = "default_user") -> str:
     return user_id
 
-# LLM Helper Functions
+# QR Code Generation
+def generate_qr_code(user_id: str) -> str:
+    """Generate QR code for user and return as base64 string"""
+    qr = qrcode.QRCode(version=1, box_size=10, border=5)
+    qr.add_data(f"taskflow://add-friend/{user_id}")
+    qr.make(fit=True)
+    
+    img = qr.make_image(fill_color="black", back_color="white")
+    buffer = io.BytesIO()
+    img.save(buffer, format='PNG')
+    img_str = base64.b64encode(buffer.getvalue()).decode()
+    return img_str
+
+# Social Helper Functions
+async def create_social_activity(user_id: str, activity_type: str, title: str, description: str, data: Dict = None):
+    """Create a social activity post"""
+    try:
+        user = await db.users.find_one({"id": user_id})
+        if not user:
+            return
+            
+        activity = SocialActivity(
+            user_id=user_id,
+            activity_type=activity_type,
+            title=title,
+            description=description,
+            data=data or {},
+            visible_to=user.get("friends", [])
+        )
+        
+        await db.social_activities.insert_one(activity.dict())
+        
+        # Send notifications to friends
+        for friend_id in user.get("friends", []):
+            friend = await db.users.find_one({"id": friend_id})
+            if friend and friend.get("settings", {}).get("notifications", {}).get("friend_activities", True):
+                notification = Notification(
+                    user_id=friend_id,
+                    title=f"{user['name']} completed a task!",
+                    message=title,
+                    type="social",
+                    related_id=user_id,
+                    scheduled_time=datetime.utcnow()
+                )
+                await db.notifications.insert_one(notification.dict())
+    except Exception as e:
+        logging.error(f"Error creating social activity: {e}")
+
+async def update_user_stats(user_id: str, task_completed: bool = False, habit_completed: bool = False):
+    """Update user statistics and check for achievements"""
+    try:
+        update_data = {"last_active": datetime.utcnow()}
+        
+        if task_completed:
+            update_data["$inc"] = {"total_tasks_completed": 1, "xp_points": 10}
+        elif habit_completed:
+            update_data["$inc"] = {"xp_points": 5}
+            
+        await db.users.update_one({"id": user_id}, {"$set": update_data} if "$inc" not in update_data else update_data)
+        
+        # Check for achievements
+        user = await db.users.find_one({"id": user_id})
+        if user:
+            total_tasks = user.get("total_tasks_completed", 0)
+            if task_completed and total_tasks in [1, 10, 50, 100]:
+                await create_social_activity(
+                    user_id,
+                    "achievement_unlocked",
+                    f"🏆 Achievement Unlocked!",
+                    f"Completed {total_tasks} tasks!",
+                    {"achievement": f"{total_tasks}_tasks_completed"}
+                )
+    except Exception as e:
+        logging.error(f"Error updating user stats: {e}")
+
+# LLM Helper Functions (existing functions remain the same...)
 async def get_ai_task_priority(task: Task, user_tasks: List[Task]) -> int:
     """Use AI to determine task priority based on context"""
     try:
@@ -225,10 +393,22 @@ async def get_next_best_task(user_id: str) -> Optional[Dict[str, Any]]:
         logging.error(f"Next best task error: {e}")
         return None
 
-# User Routes
+# Enhanced User Routes
 @api_router.post("/auth/register", response_model=User)
 async def register_user(user_data: UserCreate):
+    # Check if username exists
+    existing_user = await db.users.find_one({"username": user_data.username})
+    if existing_user:
+        raise HTTPException(status_code=400, detail="Username already exists")
+    
+    # Check if email exists
+    existing_email = await db.users.find_one({"email": user_data.email})
+    if existing_email:
+        raise HTTPException(status_code=400, detail="Email already registered")
+    
     user = User(**user_data.dict())
+    user.qr_code = generate_qr_code(user.id)
+    
     await db.users.insert_one(user.dict())
     return user
 
@@ -239,7 +419,279 @@ async def get_user(user_id: str):
         raise HTTPException(status_code=404, detail="User not found")
     return User(**user)
 
-# Task Routes
+@api_router.put("/users/{user_id}", response_model=User)
+async def update_user(user_id: str, user_update: UserUpdate):
+    update_data = {k: v for k, v in user_update.dict().items() if v is not None}
+    update_data["updated_at"] = datetime.utcnow()
+    
+    result = await db.users.update_one(
+        {"id": user_id},
+        {"$set": update_data}
+    )
+    
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    updated_user = await db.users.find_one({"id": user_id})
+    return User(**updated_user)
+
+@api_router.put("/users/{user_id}/settings")
+async def update_user_settings(user_id: str, settings: UserSettings):
+    update_data = {"settings": settings.dict()}
+    
+    result = await db.users.update_one(
+        {"id": user_id},
+        {"$set": update_data}
+    )
+    
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    return {"message": "Settings updated successfully"}
+
+# Social Features Routes
+@api_router.post("/friends/request")
+async def send_friend_request(to_user_id: str, message: Optional[str] = None, user_id: str = Depends(get_current_user)):
+    # Check if users exist
+    user = await db.users.find_one({"id": user_id})
+    target_user = await db.users.find_one({"id": to_user_id})
+    
+    if not user or not target_user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    if to_user_id in user.get("friends", []):
+        raise HTTPException(status_code=400, detail="Already friends")
+    
+    # Check if request already exists
+    existing_request = await db.friend_requests.find_one({
+        "from_user_id": user_id,
+        "to_user_id": to_user_id,
+        "status": "pending"
+    })
+    
+    if existing_request:
+        raise HTTPException(status_code=400, detail="Friend request already sent")
+    
+    friend_request = FriendRequest(
+        from_user_id=user_id,
+        to_user_id=to_user_id,
+        message=message or f"{user['name']} wants to connect with you!"
+    )
+    
+    await db.friend_requests.insert_one(friend_request.dict())
+    
+    # Add to user's sent requests
+    await db.users.update_one(
+        {"id": user_id},
+        {"$addToSet": {"friend_requests_sent": to_user_id}}
+    )
+    
+    # Add to target user's received requests
+    await db.users.update_one(
+        {"id": to_user_id},
+        {"$addToSet": {"friend_requests_received": user_id}}
+    )
+    
+    # Send notification
+    notification = Notification(
+        user_id=to_user_id,
+        title="New Friend Request",
+        message=f"{user['name']} wants to connect with you!",
+        type="social",
+        related_id=user_id,
+        scheduled_time=datetime.utcnow()
+    )
+    await db.notifications.insert_one(notification.dict())
+    
+    return {"message": "Friend request sent successfully"}
+
+@api_router.post("/friends/respond/{request_id}")
+async def respond_friend_request(request_id: str, accept: bool, user_id: str = Depends(get_current_user)):
+    friend_request = await db.friend_requests.find_one({"id": request_id})
+    
+    if not friend_request or friend_request["to_user_id"] != user_id:
+        raise HTTPException(status_code=404, detail="Friend request not found")
+    
+    if friend_request["status"] != "pending":
+        raise HTTPException(status_code=400, detail="Request already processed")
+    
+    new_status = "accepted" if accept else "rejected"
+    
+    await db.friend_requests.update_one(
+        {"id": request_id},
+        {"$set": {"status": new_status}}
+    )
+    
+    if accept:
+        # Add each user to the other's friends list
+        await db.users.update_one(
+            {"id": friend_request["from_user_id"]},
+            {"$addToSet": {"friends": user_id}}
+        )
+        await db.users.update_one(
+            {"id": user_id},
+            {"$addToSet": {"friends": friend_request["from_user_id"]}}
+        )
+    
+    # Remove from pending lists
+    await db.users.update_one(
+        {"id": friend_request["from_user_id"]},
+        {"$pull": {"friend_requests_sent": user_id}}
+    )
+    await db.users.update_one(
+        {"id": user_id},
+        {"$pull": {"friend_requests_received": friend_request["from_user_id"]}}
+    )
+    
+    return {"message": f"Friend request {new_status}"}
+
+@api_router.get("/friends")
+async def get_friends(user_id: str = Depends(get_current_user)):
+    user = await db.users.find_one({"id": user_id})
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    friends_data = []
+    for friend_id in user.get("friends", []):
+        friend = await db.users.find_one({"id": friend_id})
+        if friend:
+            friends_data.append({
+                "id": friend["id"],
+                "username": friend["username"],
+                "name": friend["name"],
+                "profile_picture": friend.get("profile_picture"),
+                "xp_points": friend.get("xp_points", 0),
+                "current_streak": friend.get("current_streak", 0),
+                "last_active": friend.get("last_active")
+            })
+    
+    return friends_data
+
+@api_router.get("/friends/search")
+async def search_users(query: str, user_id: str = Depends(get_current_user)):
+    # Search by username or name
+    users = await db.users.find({
+        "$or": [
+            {"username": {"$regex": query, "$options": "i"}},
+            {"name": {"$regex": query, "$options": "i"}}
+        ],
+        "id": {"$ne": user_id}
+    }).limit(20).to_list(20)
+    
+    return [
+        {
+            "id": user["id"],
+            "username": user["username"],
+            "name": user["name"],
+            "profile_picture": user.get("profile_picture"),
+            "bio": user.get("bio")
+        } for user in users
+    ]
+
+@api_router.get("/friends/requests")
+async def get_friend_requests(user_id: str = Depends(get_current_user)):
+    requests = await db.friend_requests.find({
+        "to_user_id": user_id,
+        "status": "pending"
+    }).to_list(50)
+    
+    requests_data = []
+    for req in requests:
+        sender = await db.users.find_one({"id": req["from_user_id"]})
+        if sender:
+            requests_data.append({
+                "id": req["id"],
+                "from_user": {
+                    "id": sender["id"],
+                    "username": sender["username"],
+                    "name": sender["name"],
+                    "profile_picture": sender.get("profile_picture")
+                },
+                "message": req.get("message"),
+                "created_at": req["created_at"]
+            })
+    
+    return requests_data
+
+# Leaderboard Routes
+@api_router.get("/leaderboard/{period}")
+async def get_leaderboard(period: str, user_id: str = Depends(get_current_user)):
+    if period not in ["daily", "weekly", "monthly"]:
+        raise HTTPException(status_code=400, detail="Invalid period")
+    
+    # Get current user's friends
+    user = await db.users.find_one({"id": user_id})
+    friends = user.get("friends", []) if user else []
+    user_list = friends + [user_id]
+    
+    # Calculate date range
+    now = datetime.utcnow()
+    if period == "daily":
+        start_date = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    elif period == "weekly":
+        start_date = now - timedelta(days=7)
+    else:  # monthly
+        start_date = now - timedelta(days=30)
+    
+    # Get task completions for the period
+    leaderboard_data = []
+    for uid in user_list:
+        tasks_completed = await db.tasks.count_documents({
+            "user_id": uid,
+            "completed": True,
+            "completed_at": {"$gte": start_date}
+        })
+        
+        user_data = await db.users.find_one({"id": uid})
+        if user_data:
+            leaderboard_data.append({
+                "user_id": uid,
+                "username": user_data["username"],
+                "name": user_data["name"],
+                "profile_picture": user_data.get("profile_picture"),
+                "tasks_completed": tasks_completed,
+                "xp_points": user_data.get("xp_points", 0),
+                "current_streak": user_data.get("current_streak", 0)
+            })
+    
+    # Sort by tasks completed, then by XP
+    leaderboard_data.sort(key=lambda x: (x["tasks_completed"], x["xp_points"]), reverse=True)
+    
+    return {
+        "period": period,
+        "leaderboard": leaderboard_data,
+        "generated_at": now
+    }
+
+# Social Activity Feed
+@api_router.get("/social/feed")
+async def get_social_feed(user_id: str = Depends(get_current_user)):
+    user = await db.users.find_one({"id": user_id})
+    friends = user.get("friends", []) if user else []
+    
+    # Get activities from friends
+    activities = await db.social_activities.find({
+        "user_id": {"$in": friends},
+        "visible_to": user_id
+    }).sort("created_at", -1).limit(50).to_list(50)
+    
+    activities_data = []
+    for activity in activities:
+        user_data = await db.users.find_one({"id": activity["user_id"]})
+        if user_data:
+            activities_data.append({
+                **activity,
+                "user": {
+                    "id": user_data["id"],
+                    "username": user_data["username"],
+                    "name": user_data["name"],
+                    "profile_picture": user_data.get("profile_picture")
+                }
+            })
+    
+    return activities_data
+
+# Enhanced Task Routes (existing routes remain the same, with social features added)
 @api_router.post("/tasks", response_model=Task)
 async def create_task(task_data: TaskCreate, user_id: str = Depends(get_current_user)):
     # Get user's existing tasks for AI context
@@ -284,14 +736,23 @@ async def update_task(task_id: str, task_update: TaskUpdate, user_id: str = Depe
     update_data = {k: v for k, v in task_update.dict().items() if v is not None}
     update_data["updated_at"] = datetime.utcnow()
     
-    # If marking as completed, add completion time and XP
+    # If marking as completed, add completion time and handle social features
     if task_update.completed:
         update_data["completed_at"] = datetime.utcnow()
-        # Award XP points
-        await db.users.update_one(
-            {"id": user_id},
-            {"$inc": {"xp_points": 10}}
-        )
+        
+        # Award XP points and update stats
+        await update_user_stats(user_id, task_completed=True)
+        
+        # Get task details for social activity
+        task = await db.tasks.find_one({"id": task_id, "user_id": user_id})
+        if task and task.get("shared_with_friends"):
+            await create_social_activity(
+                user_id,
+                "task_completed",
+                f"✅ {task['title']}",
+                f"Completed a {task.get('category', 'personal')} task",
+                {"task_id": task_id, "category": task.get("category")}
+            )
     
     result = await db.tasks.update_one(
         {"id": task_id, "user_id": user_id},
@@ -311,7 +772,7 @@ async def delete_task(task_id: str, user_id: str = Depends(get_current_user)):
         raise HTTPException(status_code=404, detail="Task not found")
     return {"message": "Task deleted successfully"}
 
-# Habit Routes
+# Enhanced Habit Routes
 @api_router.post("/habits", response_model=Habit)
 async def create_habit(habit_data: HabitCreate, user_id: str = Depends(get_current_user)):
     habit = Habit(user_id=user_id, **habit_data.dict())
@@ -342,15 +803,22 @@ async def complete_habit(habit_id: str, user_id: str = Depends(get_current_user)
             }
         )
         
-        # Award XP for habit completion
-        await db.users.update_one(
-            {"id": user_id},
-            {"$inc": {"xp_points": 5}}
-        )
+        # Award XP and update stats
+        await update_user_stats(user_id, habit_completed=True)
+        
+        # Create social activity for milestone streaks
+        if habit.get("shared_with_friends") and new_streak > 0 and new_streak % 7 == 0:
+            await create_social_activity(
+                user_id,
+                "streak_milestone",
+                f"🔥 {new_streak}-day streak!",
+                f"Maintained a {new_streak}-day streak for {habit['name']}",
+                {"habit_id": habit_id, "streak": new_streak, "habit_name": habit["name"]}
+            )
     
     return {"message": "Habit completed successfully", "streak": new_streak}
 
-# Notification Routes
+# Notification Routes (existing)
 @api_router.post("/notifications", response_model=Notification)
 async def create_notification(notification_data: NotificationCreate, user_id: str = Depends(get_current_user)):
     notification = Notification(user_id=user_id, **notification_data.dict())
@@ -364,7 +832,7 @@ async def get_notifications(user_id: str = Depends(get_current_user)):
     ).sort("created_at", -1).limit(50).to_list(50)
     return [Notification(**notif) for notif in notifications]
 
-# Analytics Routes
+# Analytics Routes (existing)
 @api_router.get("/analytics/dashboard")
 async def get_dashboard_analytics(user_id: str = Depends(get_current_user)):
     # Get task completion stats
@@ -388,10 +856,12 @@ async def get_dashboard_analytics(user_id: str = Depends(get_current_user)):
         "completion_rate": completed_tasks / total_tasks if total_tasks > 0 else 0,
         "habit_completions_this_week": habit_completions,
         "xp_points": xp_points,
-        "karma_level": xp_points // 100 + 1
+        "karma_level": xp_points // 100 + 1,
+        "current_streak": user.get("current_streak", 0) if user else 0,
+        "friends_count": len(user.get("friends", [])) if user else 0
     }
 
-# AI Routes
+# AI Routes (existing)
 @api_router.get("/ai/insights")
 async def get_ai_insights(user_id: str = Depends(get_current_user)):
     """Get AI-powered productivity insights"""
