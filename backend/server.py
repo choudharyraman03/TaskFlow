@@ -311,15 +311,6 @@ async def delete_task(task_id: str, user_id: str = Depends(get_current_user)):
         raise HTTPException(status_code=404, detail="Task not found")
     return {"message": "Task deleted successfully"}
 
-@api_router.get("/tasks/next-best")
-async def get_next_best_task_recommendation(user_id: str = Depends(get_current_user)):
-    logging.info(f"Getting next best task for user: {user_id}")
-    recommendation = await get_next_best_task(user_id)
-    logging.info(f"Recommendation result: {recommendation}")
-    if not recommendation:
-        return {"message": "No tasks available for recommendation"}
-    return recommendation
-
 # Habit Routes
 @api_router.post("/habits", response_model=Habit)
 async def create_habit(habit_data: HabitCreate, user_id: str = Depends(get_current_user)):
