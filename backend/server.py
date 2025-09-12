@@ -205,7 +205,7 @@ async def get_next_best_task(user_id: str) -> Optional[Dict[str, Any]]:
             "current_time": current_time.isoformat(),
             "tasks": [
                 {
-                    "id": str(task["_id"]),
+                    "id": task["id"],
                     "title": task["title"],
                     "priority": task.get("priority", 1),
                     "due_date": task.get("due_date"),
