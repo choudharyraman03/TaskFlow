@@ -14,7 +14,7 @@ export default function RootLayout() {
         <Stack.Screen name="social" />
         <Stack.Screen name="leaderboard" />
         <Stack.Screen name="settings" />
-        <Stack.Screen name="add-friend" />
+        <Stack.Screen name="task-crusher" />
       </Stack>
     </ThemeProvider>
   );
