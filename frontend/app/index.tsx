@@ -549,6 +549,28 @@ const createStyles = (colors: any) => StyleSheet.create({
     fontWeight: "600",
     marginLeft: 8,
   },
+  crusherButton: {
+    marginHorizontal: 20,
+    marginTop: 12,
+    borderRadius: 16,
+    overflow: "hidden",
+  },
+  crusherButtonGradient: {
+    alignItems: "center",
+    justifyContent: "center",
+    padding: 16,
+  },
+  crusherButtonText: {
+    color: "#ffffff",
+    fontSize: 16,
+    fontWeight: "600",
+    marginLeft: 8,
+  },
+  crusherButtonSubtext: {
+    color: "#ffffff",
+    fontSize: 12,
+    opacity: 0.9,
+  },
   section: {
     marginTop: 24,
     paddingHorizontal: 20,
