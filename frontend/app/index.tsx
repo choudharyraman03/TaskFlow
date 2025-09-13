@@ -276,6 +276,23 @@ export default function Index() {
             </LinearGradient>
           </TouchableOpacity>
 
+          {/* Task Crusher Button */}
+          <TouchableOpacity 
+            style={styles.crusherButton} 
+            onPress={() => router.push("/task-crusher")}
+          >
+            <LinearGradient
+              colors={["#FF6B6B", "#FF4757"]}
+              style={styles.crusherButtonGradient}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 0 }}
+            >
+              <Ionicons name="hammer" size={20} color="#ffffff" />
+              <Text style={styles.crusherButtonText}>Task Crusher</Text>
+              <Text style={styles.crusherButtonSubtext}>Break complex tasks into steps</Text>
+            </LinearGradient>
+          </TouchableOpacity>
+
           {/* Tasks Section */}
           <View style={styles.section}>
             <View style={styles.sectionHeader}>
