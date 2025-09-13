@@ -861,6 +861,313 @@ async def get_dashboard_analytics(user_id: str = Depends(get_current_user)):
         "friends_count": len(user.get("friends", [])) if user else 0
     }
 
+# Task Crusher Models
+class TaskCrusherRequest(BaseModel):
+    main_task: str
+    description: Optional[str] = None
+    category: str = "personal"
+    estimated_duration: Optional[int] = None
+    difficulty_level: str = "medium"  # easy, medium, hard, expert
+
+class SubTaskSuggestion(BaseModel):
+    title: str
+    description: str
+    estimated_duration: int  # minutes
+    priority: int
+    order: int
+    dependencies: List[str] = Field(default_factory=list)
+
+class TaskCrusherResponse(BaseModel):
+    main_task: str
+    suggested_subtasks: List[SubTaskSuggestion]
+    total_estimated_duration: int
+    completion_strategy: str
+    ai_confidence: float
+
+class TaskGroup(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    user_id: str
+    main_task_title: str
+    main_task_description: Optional[str] = None
+    category: str
+    total_subtasks: int
+    completed_subtasks: int = 0
+    progress_percentage: float = 0.0
+    subtask_ids: List[str] = Field(default_factory=list)
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    completed_at: Optional[datetime] = None
+    is_active: bool = True
+
+# Task Crusher AI Function
+async def crush_task_with_ai(task_request: TaskCrusherRequest) -> TaskCrusherResponse:
+    """Use AI to break down a complex task into manageable subtasks"""
+    try:
+        chat = LlmChat(
+            api_key=EMERGENT_LLM_KEY,
+            session_id=f"task_crusher_{uuid.uuid4()}",
+            system_message="""You are TaskCrusher, an AI productivity expert that breaks down complex tasks into manageable subtasks. 
+            Your goal is to create a logical, step-by-step breakdown that makes big projects feel achievable.
+            
+            Guidelines:
+            - Break tasks into 3-8 subtasks (optimal range for cognitive load)
+            - Each subtask should be completable in 15-90 minutes
+            - Order subtasks logically with dependencies
+            - Provide realistic time estimates
+            - Include preparatory and wrap-up steps
+            - Make subtasks specific and actionable
+            - Consider difficulty level for complexity adjustment
+            
+            Response format: JSON with subtasks array, each containing title, description, estimated_duration (minutes), priority (1-5), order (1-N), and dependencies (array of subtask titles that must be done first)."""
+        ).with_model("openai", "gpt-4o-mini")
+        
+        context = {
+            "main_task": task_request.main_task,
+            "description": task_request.description or "",
+            "category": task_request.category,
+            "estimated_duration": task_request.estimated_duration,
+            "difficulty_level": task_request.difficulty_level
+        }
+        
+        message = UserMessage(
+            text=f"""Break down this complex task into manageable subtasks:
+
+Task: {task_request.main_task}
+Description: {task_request.description or 'Not provided'}
+Category: {task_request.category}
+Difficulty: {task_request.difficulty_level}
+Estimated Duration: {task_request.estimated_duration or 'Not specified'} minutes
+
+Provide a JSON response with the following structure:
+{{
+    "subtasks": [
+        {{
+            "title": "Clear, actionable subtask title",
+            "description": "Detailed description of what needs to be done",
+            "estimated_duration": 30,
+            "priority": 3,
+            "order": 1,
+            "dependencies": []
+        }}
+    ],
+    "completion_strategy": "Brief strategy for tackling this project effectively",
+    "total_estimated_duration": 180
+}}
+
+Make sure subtasks are logical, ordered, and actionable."""
+        )
+        
+        response = await chat.send_message(message)
+        
+        # Parse AI response
+        try:
+            ai_data = json.loads(response)
+            subtasks = []
+            
+            for i, subtask_data in enumerate(ai_data.get("subtasks", [])):
+                subtask = SubTaskSuggestion(
+                    title=subtask_data.get("title", f"Subtask {i+1}"),
+                    description=subtask_data.get("description", ""),
+                    estimated_duration=subtask_data.get("estimated_duration", 30),
+                    priority=subtask_data.get("priority", 3),
+                    order=subtask_data.get("order", i+1),
+                    dependencies=subtask_data.get("dependencies", [])
+                )
+                subtasks.append(subtask)
+            
+            return TaskCrusherResponse(
+                main_task=task_request.main_task,
+                suggested_subtasks=subtasks,
+                total_estimated_duration=ai_data.get("total_estimated_duration", sum(s.estimated_duration for s in subtasks)),
+                completion_strategy=ai_data.get("completion_strategy", "Complete subtasks in the suggested order for optimal results."),
+                ai_confidence=0.85
+            )
+            
+        except json.JSONDecodeError:
+            # Fallback if AI doesn't return valid JSON
+            return TaskCrusherResponse(
+                main_task=task_request.main_task,
+                suggested_subtasks=[
+                    SubTaskSuggestion(
+                        title="Research and Planning",
+                        description="Gather information and create a detailed plan",
+                        estimated_duration=45,
+                        priority=4,
+                        order=1
+                    ),
+                    SubTaskSuggestion(
+                        title="Initial Setup",
+                        description="Set up necessary tools and environment",
+                        estimated_duration=30,
+                        priority=3,
+                        order=2
+                    ),
+                    SubTaskSuggestion(
+                        title="Core Implementation",
+                        description="Work on the main components of the task",
+                        estimated_duration=90,
+                        priority=5,
+                        order=3
+                    ),
+                    SubTaskSuggestion(
+                        title="Review and Finalize",
+                        description="Review work and make final adjustments",
+                        estimated_duration=30,
+                        priority=3,
+                        order=4
+                    )
+                ],
+                total_estimated_duration=195,
+                completion_strategy="Follow the structured approach from planning to implementation to review.",
+                ai_confidence=0.7
+            )
+            
+    except Exception as e:
+        logging.error(f"Task crusher AI error: {e}")
+        raise HTTPException(status_code=500, detail="Failed to generate task breakdown")
+
+# Task Crusher Routes
+@api_router.post("/task-crusher/analyze", response_model=TaskCrusherResponse)
+async def analyze_complex_task(task_request: TaskCrusherRequest, user_id: str = Depends(get_current_user)):
+    """Analyze a complex task and suggest subtasks breakdown"""
+    return await crush_task_with_ai(task_request)
+
+@api_router.post("/task-crusher/create-group")
+async def create_task_group(
+    crusher_response: TaskCrusherResponse, 
+    user_id: str = Depends(get_current_user)
+):
+    """Create a task group with all suggested subtasks"""
+    try:
+        # Create the task group
+        task_group = TaskGroup(
+            user_id=user_id,
+            main_task_title=crusher_response.main_task,
+            main_task_description=f"AI-generated breakdown: {crusher_response.completion_strategy}",
+            category="personal",  # Could be enhanced to use original category
+            total_subtasks=len(crusher_response.suggested_subtasks)
+        )
+        
+        # Create all subtasks
+        created_subtask_ids = []
+        for subtask_suggestion in crusher_response.suggested_subtasks:
+            subtask = Task(
+                user_id=user_id,
+                title=subtask_suggestion.title,
+                description=subtask_suggestion.description,
+                priority=subtask_suggestion.priority,
+                category=task_group.category,
+                estimated_duration=subtask_suggestion.estimated_duration,
+                tags=["task-crusher", f"group-{task_group.id}"],
+                shared_with_friends=False
+            )
+            
+            await db.tasks.insert_one(subtask.dict())
+            created_subtask_ids.append(subtask.id)
+        
+        # Update task group with subtask IDs
+        task_group.subtask_ids = created_subtask_ids
+        
+        # Save task group
+        await db.task_groups.insert_one(task_group.dict())
+        
+        # Create social activity
+        await create_social_activity(
+            user_id,
+            "task_completed",
+            f"🎯 Crushed a complex task!",
+            f"Broke down '{crusher_response.main_task}' into {len(crusher_response.suggested_subtasks)} manageable subtasks",
+            {
+                "task_group_id": task_group.id,
+                "subtasks_count": len(crusher_response.suggested_subtasks),
+                "category": "productivity"
+            }
+        )
+        
+        return {
+            "message": "Task group created successfully",
+            "task_group_id": task_group.id,
+            "subtasks_created": len(created_subtask_ids),
+            "subtask_ids": created_subtask_ids
+        }
+        
+    except Exception as e:
+        logging.error(f"Error creating task group: {e}")
+        raise HTTPException(status_code=500, detail="Failed to create task group")
+
+@api_router.get("/task-crusher/groups")
+async def get_task_groups(user_id: str = Depends(get_current_user)):
+    """Get all task groups for the user"""
+    try:
+        groups = await db.task_groups.find({"user_id": user_id, "is_active": True}).sort("created_at", -1).to_list(100)
+        
+        # Enhance with current progress
+        enhanced_groups = []
+        for group in groups:
+            # Get current subtask completion status
+            completed_count = await db.tasks.count_documents({
+                "id": {"$in": group["subtask_ids"]},
+                "completed": True
+            })
+            
+            group["completed_subtasks"] = completed_count
+            group["progress_percentage"] = (completed_count / group["total_subtasks"]) * 100 if group["total_subtasks"] > 0 else 0
+            
+            # Update in database
+            await db.task_groups.update_one(
+                {"id": group["id"]},
+                {"$set": {
+                    "completed_subtasks": completed_count,
+                    "progress_percentage": group["progress_percentage"]
+                }}
+            )
+            
+            enhanced_groups.append(TaskGroup(**group))
+        
+        return enhanced_groups
+        
+    except Exception as e:
+        logging.error(f"Error fetching task groups: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch task groups")
+
+@api_router.get("/task-crusher/groups/{group_id}/subtasks")
+async def get_group_subtasks(group_id: str, user_id: str = Depends(get_current_user)):
+    """Get all subtasks for a specific task group"""
+    try:
+        group = await db.task_groups.find_one({"id": group_id, "user_id": user_id})
+        if not group:
+            raise HTTPException(status_code=404, detail="Task group not found")
+        
+        # Get all subtasks for this group
+        subtasks = await db.tasks.find({
+            "id": {"$in": group["subtask_ids"]}
+        }).sort("created_at", 1).to_list(100)
+        
+        return [Task(**task) for task in subtasks]
+        
+    except Exception as e:
+        logging.error(f"Error fetching group subtasks: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch group subtasks")
+
+@api_router.delete("/task-crusher/groups/{group_id}")
+async def delete_task_group(group_id: str, user_id: str = Depends(get_current_user)):
+    """Delete a task group and optionally its subtasks"""
+    try:
+        group = await db.task_groups.find_one({"id": group_id, "user_id": user_id})
+        if not group:
+            raise HTTPException(status_code=404, detail="Task group not found")
+        
+        # Mark group as inactive instead of deleting
+        await db.task_groups.update_one(
+            {"id": group_id},
+            {"$set": {"is_active": False}}
+        )
+        
+        return {"message": "Task group deleted successfully"}
+        
+    except Exception as e:
+        logging.error(f"Error deleting task group: {e}")
+        raise HTTPException(status_code=500, detail="Failed to delete task group")
+
 # AI Routes (existing)
 @api_router.get("/ai/insights")
 async def get_ai_insights(user_id: str = Depends(get_current_user)):
