@@ -1203,15 +1203,24 @@ async def update_task(task_id: str, task_update: TaskUpdate, user_id: str = Depe
     update_data = {k: v for k, v in task_update.dict().items() if v is not None}
     update_data["updated_at"] = datetime.utcnow()
     
-    # If marking as completed, add completion time and handle social features
+    # If marking as completed, add completion time and handle rewards
     if task_update.completed:
         update_data["completed_at"] = datetime.utcnow()
         
-        # Award XP points and update stats
-        await update_user_stats(user_id, task_completed=True)
+        # Get task details to determine if it's a big task
+        task = await db.tasks.find_one({"id": task_id, "user_id": user_id})
+        if task:
+            # Determine if it's a big task based on estimated duration or description length
+            is_big_task = (
+                task.get("estimated_duration", 0) >= 120 or  # 2+ hours
+                len(task.get("description", "")) > 100 or  # Long description
+                task.get("priority", 1) >= 4  # High priority
+            )
+            
+            # Update user stats with appropriate coin reward
+            await update_user_stats(user_id, task_completed=True, big_task=is_big_task)
         
         # Get task details for social activity
-        task = await db.tasks.find_one({"id": task_id, "user_id": user_id})
         if task and task.get("shared_with_friends"):
             await create_social_activity(
                 user_id,
