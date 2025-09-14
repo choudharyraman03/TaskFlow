@@ -31,7 +31,7 @@ EMERGENT_LLM_KEY = os.environ.get('EMERGENT_LLM_KEY', 'sk-emergent-b8cA8B9D5F379
 app = FastAPI()
 api_router = APIRouter(prefix="/api")
 
-# Enhanced Pydantic Models
+# Enhanced User Model with Coins
 class UserSettings(BaseModel):
     notifications: Dict[str, bool] = Field(default_factory=lambda: {
         "task_reminders": True,
@@ -65,6 +65,7 @@ class User(BaseModel):
     timezone: str = "UTC"
     xp_points: int = 0
     karma_level: int = 1
+    coins: int = 0  # New: Coin balance
     total_tasks_completed: int = 0
     current_streak: int = 0
     best_streak: int = 0
@@ -75,6 +76,68 @@ class User(BaseModel):
     qr_code: Optional[str] = None  # base64 encoded QR code
     created_at: datetime = Field(default_factory=datetime.utcnow)
     last_active: datetime = Field(default_factory=datetime.utcnow)
+
+# Coins & Store Models
+class StoreItem(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    name: str
+    description: str
+    price_coins: int  # Price in coins
+    price_inr: float  # Equivalent INR value (price_coins / 4)
+    category: str  # electronics, books, food, etc.
+    image_url: Optional[str] = None
+    stock_quantity: int = 100
+    is_available: bool = True
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+class Purchase(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    user_id: str
+    item_id: str
+    item_name: str
+    coins_spent: int
+    inr_value: float
+    status: str = "pending"  # pending, completed, cancelled
+    delivery_address: Optional[str] = None
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    completed_at: Optional[datetime] = None
+
+class CoinTransaction(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    user_id: str
+    amount: int  # Positive for earned, negative for spent
+    transaction_type: str  # task_completion, habit_completion, purchase, bonus
+    description: str
+    related_id: Optional[str] = None  # task_id, habit_id, purchase_id
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+# Daily Tasks Models
+class DailyTask(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    user_id: str
+    title: str
+    description: Optional[str] = None
+    category: str = "daily"
+    estimated_duration: Optional[int] = None  # minutes
+    priority: int = 3
+    is_active: bool = True
+    order: int = 1  # Order in the daily list (1-6)
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+class DailyTaskCreate(BaseModel):
+    title: str
+    description: Optional[str] = None
+    estimated_duration: Optional[int] = None
+    priority: int = 3
+    order: Optional[int] = None
+
+class DailyTaskCompletion(BaseModel):
+    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
+    user_id: str
+    daily_task_id: str
+    completed_date: datetime = Field(default_factory=datetime.utcnow)
+    coins_earned: int = 1
+    created_at: datetime = Field(default_factory=datetime.utcnow)
 
 class UserCreate(BaseModel):
     username: str
