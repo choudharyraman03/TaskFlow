@@ -42,8 +42,11 @@ interface DashboardStats {
   completed_tasks: number;
   completion_rate: number;
   xp_points: number;
+  coins: number;
+  inr_value: number;
   karma_level: number;
   habit_completions_this_week: number;
+  daily_tasks_completed_today: number;
   current_streak: number;
   friends_count: number;
 }
