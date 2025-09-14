@@ -15,6 +15,8 @@ export default function RootLayout() {
         <Stack.Screen name="leaderboard" />
         <Stack.Screen name="settings" />
         <Stack.Screen name="task-crusher" />
+        <Stack.Screen name="store" />
+        <Stack.Screen name="daily-tasks" />
       </Stack>
     </ThemeProvider>
   );
