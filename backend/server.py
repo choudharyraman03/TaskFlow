@@ -1322,16 +1322,27 @@ async def get_dashboard_analytics(user_id: str = Depends(get_current_user)):
         "completed_date": {"$gte": week_start}
     })
     
+    # Get daily task completions for today
+    today = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+    daily_task_completions = await db.daily_task_completions.count_documents({
+        "user_id": user_id,
+        "completed_date": {"$gte": today}
+    })
+    
     # Get user stats
     user = await db.users.find_one({"id": user_id})
     xp_points = user.get("xp_points", 0) if user else 0
+    coins = user.get("coins", 0) if user else 0
     
     return {
         "total_tasks": total_tasks,
         "completed_tasks": completed_tasks,
         "completion_rate": completed_tasks / total_tasks if total_tasks > 0 else 0,
         "habit_completions_this_week": habit_completions,
+        "daily_tasks_completed_today": daily_task_completions,
         "xp_points": xp_points,
+        "coins": coins,
+        "inr_value": coins / 4,  # 4 coins = 1 INR
         "karma_level": xp_points // 100 + 1,
         "current_streak": user.get("current_streak", 0) if user else 0,
         "friends_count": len(user.get("friends", [])) if user else 0
