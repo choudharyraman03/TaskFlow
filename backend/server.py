@@ -1725,6 +1725,11 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+@app.on_event("startup")
+async def startup_event():
+    """Initialize the application"""
+    await initialize_store_items()
+
 @app.on_event("shutdown")
 async def shutdown_db_client():
     client.close()
