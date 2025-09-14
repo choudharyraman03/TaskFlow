@@ -424,10 +424,26 @@ export default function Index() {
           <View style={styles.quickActions}>
             <TouchableOpacity 
               style={[styles.quickActionButton, { backgroundColor: colors.surface }]}
+              onPress={() => router.push("/daily-tasks")}
+            >
+              <Ionicons name="today" size={24} color={colors.primary} />
+              <Text style={[styles.quickActionText, { color: colors.text }]}>Daily Tasks</Text>
+            </TouchableOpacity>
+            
+            <TouchableOpacity 
+              style={[styles.quickActionButton, { backgroundColor: colors.surface }]}
               onPress={() => router.push("/habits")}
             >
               <Ionicons name="repeat" size={24} color={colors.primary} />
               <Text style={[styles.quickActionText, { color: colors.text }]}>Habits</Text>
+            </TouchableOpacity>
+            
+            <TouchableOpacity 
+              style={[styles.quickActionButton, { backgroundColor: colors.surface }]}
+              onPress={() => router.push("/store")}
+            >
+              <Ionicons name="storefront" size={24} color={colors.primary} />
+              <Text style={[styles.quickActionText, { color: colors.text }]}>Store</Text>
             </TouchableOpacity>
             
             <TouchableOpacity 
