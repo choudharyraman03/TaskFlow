@@ -352,15 +352,41 @@ async def create_social_activity(user_id: str, activity_type: str, title: str, d
     except Exception as e:
         logging.error(f"Error creating social activity: {e}")
 
-async def update_user_stats(user_id: str, task_completed: bool = False, habit_completed: bool = False):
+async def update_user_stats(user_id: str, task_completed: bool = False, habit_completed: bool = False, big_task: bool = False):
     """Update user statistics and check for achievements"""
     try:
         update_data = {"last_active": datetime.utcnow()}
+        coins_earned = 0
         
         if task_completed:
-            update_data["$inc"] = {"total_tasks_completed": 1, "xp_points": 10}
+            coins_earned = 4 if big_task else 1
+            update_data["$inc"] = {
+                "total_tasks_completed": 1, 
+                "xp_points": 10,
+                "coins": coins_earned
+            }
+            
+            # Record coin transaction
+            transaction = CoinTransaction(
+                user_id=user_id,
+                amount=coins_earned,
+                transaction_type="task_completion",
+                description=f"Earned {coins_earned} coins for completing {'big' if big_task else 'normal'} task"
+            )
+            await db.coin_transactions.insert_one(transaction.dict())
+            
         elif habit_completed:
-            update_data["$inc"] = {"xp_points": 5}
+            coins_earned = 1
+            update_data["$inc"] = {"xp_points": 5, "coins": coins_earned}
+            
+            # Record coin transaction
+            transaction = CoinTransaction(
+                user_id=user_id,
+                amount=coins_earned,
+                transaction_type="habit_completion",
+                description="Earned 1 coin for completing habit"
+            )
+            await db.coin_transactions.insert_one(transaction.dict())
             
         await db.users.update_one({"id": user_id}, {"$set": update_data} if "$inc" not in update_data else update_data)
         
@@ -376,8 +402,386 @@ async def update_user_stats(user_id: str, task_completed: bool = False, habit_co
                     f"Completed {total_tasks} tasks!",
                     {"achievement": f"{total_tasks}_tasks_completed"}
                 )
+                
+                # Bonus coins for achievements
+                bonus_coins = total_tasks // 10
+                if bonus_coins > 0:
+                    await db.users.update_one({"id": user_id}, {"$inc": {"coins": bonus_coins}})
+                    bonus_transaction = CoinTransaction(
+                        user_id=user_id,
+                        amount=bonus_coins,
+                        transaction_type="bonus",
+                        description=f"Achievement bonus: {bonus_coins} coins"
+                    )
+                    await db.coin_transactions.insert_one(bonus_transaction.dict())
+                    
     except Exception as e:
         logging.error(f"Error updating user stats: {e}")
+
+# Initialize Store Items
+async def initialize_store_items():
+    """Initialize the store with sample items"""
+    try:
+        existing_items = await db.store_items.count_documents({})
+        if existing_items == 0:
+            sample_items = [
+                StoreItem(
+                    name="Amazon Gift Card ₹100",
+                    description="Redeem this for shopping on Amazon India",
+                    price_coins=400,  # 400 coins = ₹100
+                    price_inr=100.0,
+                    category="gift_cards"
+                ),
+                StoreItem(
+                    name="Smartphone Case",
+                    description="Protective case for your smartphone",
+                    price_coins=120,  # 120 coins = ₹30
+                    price_inr=30.0,
+                    category="electronics"
+                ),
+                StoreItem(
+                    name="Notebook Set",
+                    description="Premium quality notebooks for writing",
+                    price_coins=80,  # 80 coins = ₹20
+                    price_inr=20.0,
+                    category="stationery"
+                ),
+                StoreItem(
+                    name="Coffee Voucher",
+                    description="Free coffee at popular cafes",
+                    price_coins=200,  # 200 coins = ₹50
+                    price_inr=50.0,
+                    category="food"
+                ),
+                StoreItem(
+                    name="Book: Productivity Hacks",
+                    description="Best-selling book on productivity and time management",
+                    price_coins=240,  # 240 coins = ₹60
+                    price_inr=60.0,
+                    category="books"
+                ),
+                StoreItem(
+                    name="Power Bank 10000mAh",
+                    description="Portable power bank for your devices",
+                    price_coins=600,  # 600 coins = ₹150
+                    price_inr=150.0,
+                    category="electronics"
+                ),
+                StoreItem(
+                    name="Fitness Tracker",
+                    description="Track your daily fitness activities",
+                    price_coins=800,  # 800 coins = ₹200
+                    price_inr=200.0,
+                    category="fitness"
+                ),
+                StoreItem(
+                    name="Headphones",
+                    description="High-quality wireless headphones",
+                    price_coins=1200,  # 1200 coins = ₹300
+                    price_inr=300.0,
+                    category="electronics"
+                )
+            ]
+            
+            for item in sample_items:
+                await db.store_items.insert_one(item.dict())
+            
+            logging.info("Store initialized with sample items")
+            
+    except Exception as e:
+        logging.error(f"Error initializing store: {e}")
+
+# Coins & Store Routes
+@api_router.get("/store/items")
+async def get_store_items(category: Optional[str] = None):
+    """Get all available store items"""
+    try:
+        query = {"is_available": True}
+        if category:
+            query["category"] = category
+            
+        items = await db.store_items.find(query).sort("price_coins", 1).to_list(100)
+        return [StoreItem(**item) for item in items]
+        
+    except Exception as e:
+        logging.error(f"Error fetching store items: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch store items")
+
+@api_router.get("/store/categories")
+async def get_store_categories():
+    """Get all available store categories"""
+    try:
+        categories = await db.store_items.distinct("category", {"is_available": True})
+        return {"categories": categories}
+        
+    except Exception as e:
+        logging.error(f"Error fetching categories: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch categories")
+
+@api_router.post("/store/purchase/{item_id}")
+async def purchase_item(
+    item_id: str, 
+    delivery_address: Optional[str] = None,
+    user_id: str = Depends(get_current_user)
+):
+    """Purchase an item from the store"""
+    try:
+        # Get item details
+        item = await db.store_items.find_one({"id": item_id, "is_available": True})
+        if not item:
+            raise HTTPException(status_code=404, detail="Item not found or unavailable")
+        
+        # Get user's coin balance
+        user = await db.users.find_one({"id": user_id})
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        user_coins = user.get("coins", 0)
+        if user_coins < item["price_coins"]:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Insufficient coins. You have {user_coins} coins, need {item['price_coins']}"
+            )
+        
+        # Create purchase record
+        purchase = Purchase(
+            user_id=user_id,
+            item_id=item_id,
+            item_name=item["name"],
+            coins_spent=item["price_coins"],
+            inr_value=item["price_inr"],
+            delivery_address=delivery_address,
+            status="completed"
+        )
+        
+        # Deduct coins from user
+        await db.users.update_one(
+            {"id": user_id},
+            {"$inc": {"coins": -item["price_coins"]}}
+        )
+        
+        # Record coin transaction
+        transaction = CoinTransaction(
+            user_id=user_id,
+            amount=-item["price_coins"],
+            transaction_type="purchase",
+            description=f"Purchased {item['name']}",
+            related_id=purchase.id
+        )
+        
+        # Save purchase and transaction
+        await db.purchases.insert_one(purchase.dict())
+        await db.coin_transactions.insert_one(transaction.dict())
+        
+        # Create social activity
+        await create_social_activity(
+            user_id,
+            "achievement_unlocked",
+            f"🛍️ Made a purchase!",
+            f"Bought {item['name']} for {item['price_coins']} coins",
+            {"purchase_id": purchase.id, "item_name": item["name"]}
+        )
+        
+        return {
+            "purchase_id": purchase.id,
+            "message": f"Successfully purchased {item['name']}!",
+            "coins_spent": item["price_coins"],
+            "remaining_coins": user_coins - item["price_coins"]
+        }
+        
+    except Exception as e:
+        logging.error(f"Error processing purchase: {e}")
+        raise HTTPException(status_code=500, detail="Failed to process purchase")
+
+@api_router.get("/coins/transactions")
+async def get_coin_transactions(user_id: str = Depends(get_current_user)):
+    """Get user's coin transaction history"""
+    try:
+        transactions = await db.coin_transactions.find(
+            {"user_id": user_id}
+        ).sort("created_at", -1).limit(50).to_list(50)
+        
+        return [CoinTransaction(**transaction) for transaction in transactions]
+        
+    except Exception as e:
+        logging.error(f"Error fetching transactions: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch transactions")
+
+@api_router.get("/coins/balance")
+async def get_coin_balance(user_id: str = Depends(get_current_user)):
+    """Get user's current coin balance"""
+    try:
+        user = await db.users.find_one({"id": user_id})
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+        
+        return {
+            "coins": user.get("coins", 0),
+            "inr_value": user.get("coins", 0) / 4  # 4 coins = 1 INR
+        }
+        
+    except Exception as e:
+        logging.error(f"Error fetching coin balance: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch coin balance")
+
+# Daily Tasks Routes
+@api_router.post("/daily-tasks", response_model=DailyTask)
+async def create_daily_task(task_data: DailyTaskCreate, user_id: str = Depends(get_current_user)):
+    """Create a new daily task"""
+    try:
+        # Check if user already has 6 daily tasks
+        existing_count = await db.daily_tasks.count_documents({
+            "user_id": user_id, 
+            "is_active": True
+        })
+        
+        if existing_count >= 6:
+            raise HTTPException(
+                status_code=400, 
+                detail="You can only have up to 6 daily tasks"
+            )
+        
+        # Set order if not provided
+        if task_data.order is None:
+            task_data.order = existing_count + 1
+        
+        daily_task = DailyTask(user_id=user_id, **task_data.dict())
+        await db.daily_tasks.insert_one(daily_task.dict())
+        
+        return daily_task
+        
+    except Exception as e:
+        logging.error(f"Error creating daily task: {e}")
+        raise HTTPException(status_code=500, detail="Failed to create daily task")
+
+@api_router.get("/daily-tasks", response_model=List[DailyTask])
+async def get_daily_tasks(user_id: str = Depends(get_current_user)):
+    """Get user's daily tasks"""
+    try:
+        tasks = await db.daily_tasks.find({
+            "user_id": user_id, 
+            "is_active": True
+        }).sort("order", 1).to_list(6)
+        
+        return [DailyTask(**task) for task in tasks]
+        
+    except Exception as e:
+        logging.error(f"Error fetching daily tasks: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch daily tasks")
+
+@api_router.post("/daily-tasks/{task_id}/complete")
+async def complete_daily_task(task_id: str, user_id: str = Depends(get_current_user)):
+    """Complete a daily task and earn coins"""
+    try:
+        # Check if task exists
+        daily_task = await db.daily_tasks.find_one({
+            "id": task_id, 
+            "user_id": user_id, 
+            "is_active": True
+        })
+        
+        if not daily_task:
+            raise HTTPException(status_code=404, detail="Daily task not found")
+        
+        # Check if already completed today
+        today = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+        existing_completion = await db.daily_task_completions.find_one({
+            "user_id": user_id,
+            "daily_task_id": task_id,
+            "completed_date": {"$gte": today}
+        })
+        
+        if existing_completion:
+            raise HTTPException(status_code=400, detail="Task already completed today")
+        
+        # Record completion
+        completion = DailyTaskCompletion(
+            user_id=user_id,
+            daily_task_id=task_id,
+            coins_earned=1
+        )
+        
+        await db.daily_task_completions.insert_one(completion.dict())
+        
+        # Update user stats and coins
+        await update_user_stats(user_id, task_completed=True, big_task=False)
+        
+        return {
+            "message": "Daily task completed!",
+            "coins_earned": 1,
+            "task_name": daily_task["title"]
+        }
+        
+    except Exception as e:
+        logging.error(f"Error completing daily task: {e}")
+        raise HTTPException(status_code=500, detail="Failed to complete daily task")
+
+@api_router.put("/daily-tasks/{task_id}", response_model=DailyTask)
+async def update_daily_task(
+    task_id: str, 
+    task_update: DailyTaskCreate, 
+    user_id: str = Depends(get_current_user)
+):
+    """Update a daily task"""
+    try:
+        update_data = {k: v for k, v in task_update.dict().items() if v is not None}
+        
+        result = await db.daily_tasks.update_one(
+            {"id": task_id, "user_id": user_id},
+            {"$set": update_data}
+        )
+        
+        if result.matched_count == 0:
+            raise HTTPException(status_code=404, detail="Daily task not found")
+        
+        updated_task = await db.daily_tasks.find_one({"id": task_id, "user_id": user_id})
+        return DailyTask(**updated_task)
+        
+    except Exception as e:
+        logging.error(f"Error updating daily task: {e}")
+        raise HTTPException(status_code=500, detail="Failed to update daily task")
+
+@api_router.delete("/daily-tasks/{task_id}")
+async def delete_daily_task(task_id: str, user_id: str = Depends(get_current_user)):
+    """Delete a daily task"""
+    try:
+        result = await db.daily_tasks.update_one(
+            {"id": task_id, "user_id": user_id},
+            {"$set": {"is_active": False}}
+        )
+        
+        if result.matched_count == 0:
+            raise HTTPException(status_code=404, detail="Daily task not found")
+        
+        return {"message": "Daily task deleted successfully"}
+        
+    except Exception as e:
+        logging.error(f"Error deleting daily task: {e}")
+        raise HTTPException(status_code=500, detail="Failed to delete daily task")
+
+@api_router.get("/daily-tasks/completions/today")
+async def get_today_completions(user_id: str = Depends(get_current_user)):
+    """Get today's daily task completions"""
+    try:
+        today = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+        tomorrow = today + timedelta(days=1)
+        
+        completions = await db.daily_task_completions.find({
+            "user_id": user_id,
+            "completed_date": {"$gte": today, "$lt": tomorrow}
+        }).to_list(10)
+        
+        completed_task_ids = [comp["daily_task_id"] for comp in completions]
+        
+        return {
+            "completed_today": len(completed_task_ids),
+            "completed_task_ids": completed_task_ids,
+            "total_coins_earned": sum(comp.get("coins_earned", 1) for comp in completions)
+        }
+        
+    except Exception as e:
+        logging.error(f"Error fetching today's completions: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch completions")
 
 # LLM Helper Functions (existing functions remain the same...)
 async def get_ai_task_priority(task: Task, user_tasks: List[Task]) -> int:
