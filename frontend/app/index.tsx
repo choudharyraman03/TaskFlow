@@ -247,11 +247,14 @@ export default function Index() {
                   <Text style={styles.statNumber}>{formatXP(stats.xp_points)}</Text>
                   <Text style={styles.statLabel}>XP</Text>
                 </View>
-                <View style={styles.statCard}>
+                <TouchableOpacity 
+                  style={styles.statCard}
+                  onPress={() => router.push("/store")}
+                >
                   <Ionicons name="diamond" size={20} color="#4ECDC4" />
-                  <Text style={styles.statNumber}>{stats.karma_level}</Text>
-                  <Text style={styles.statLabel}>Level</Text>
-                </View>
+                  <Text style={styles.statNumber}>{stats.coins}</Text>
+                  <Text style={styles.statLabel}>Coins</Text>
+                </TouchableOpacity>
                 <View style={styles.statCard}>
                   <Ionicons name="flame" size={20} color="#FF6B6B" />
                   <Text style={styles.statNumber}>{stats.current_streak}</Text>
